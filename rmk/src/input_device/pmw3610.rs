@@ -210,53 +210,57 @@ impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTIO
         Ok(())
     }
 
+    #[inline(always)]
+    fn busy_delay(duration: Duration) {
+        let start = Instant::now();
+        while start.elapsed() < duration {
+            core::hint::spin_loop();
+        }
+    }
+
     async fn read_reg(&mut self, addr: u8) -> Result<u8, Pmw3610Error> {
         let _ = self.cs.set_low();
-        Timer::after(Duration::from_nanos(T_NCS_SCLK_NS)).await;
+        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
 
         self.spi.write(&[addr & 0x7f]).await.map_err(|_| Pmw3610Error::Spi)?;
 
-        Timer::after(Duration::from_micros(T_SRAD_US)).await;
+        Self::busy_delay(Duration::from_micros(T_SRAD_US));
 
         let mut value = [0u8];
         self.spi.read(&mut value).await.map_err(|_| Pmw3610Error::Spi)?;
 
-        Timer::after(Duration::from_nanos(T_SCLK_NCS_R_NS)).await;
+        Self::busy_delay(Duration::from_nanos(T_SCLK_NCS_R_NS));
         let _ = self.cs.set_high();
-
-        Timer::after(Duration::from_nanos(T_SRX_NS)).await;
 
         Ok(value[0])
     }
 
     async fn read_burst(&mut self, addr: u8, data: &mut [u8]) -> Result<(), Pmw3610Error> {
         let _ = self.cs.set_low();
-        Timer::after(Duration::from_nanos(T_NCS_SCLK_NS)).await;
+        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
 
         self.spi.write(&[addr & 0x7f]).await.map_err(|_| Pmw3610Error::Spi)?;
 
-        Timer::after(Duration::from_micros(T_SRAD_US)).await;
+        Self::busy_delay(Duration::from_micros(T_SRAD_US));
 
         self.spi.read(data).await.map_err(|_| Pmw3610Error::Spi)?;
 
-        Timer::after(Duration::from_nanos(T_SCLK_NCS_R_NS)).await;
+        Self::busy_delay(Duration::from_nanos(T_SCLK_NCS_R_NS));
         let _ = self.cs.set_high();
-
-        Timer::after(Duration::from_nanos(T_BEXIT_NS)).await;
 
         Ok(())
     }
 
     async fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Pmw3610Error> {
         let _ = self.cs.set_low();
-        Timer::after(Duration::from_nanos(T_NCS_SCLK_NS)).await;
+        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
 
         self.spi
             .write(&[addr | SPI_WRITE, value])
             .await
             .map_err(|_| Pmw3610Error::Spi)?;
 
-        Timer::after(Duration::from_micros(T_SCLK_NCS_W_US)).await;
+        Self::busy_delay(Duration::from_micros(T_SCLK_NCS_W_US));
         let _ = self.cs.set_high();
 
         Timer::after(Duration::from_micros(T_SWX_US)).await;

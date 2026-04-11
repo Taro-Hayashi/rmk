@@ -43,6 +43,10 @@ use crate::matrix::{KeyState, MatrixTrait};
 
 /// Maximum number of bytes in the shift register chain (supports up to 32 columns).
 const SR_MAX_BYTES: usize = 4;
+/// Extra time for previously-driven columns to discharge.
+const SR_CLEAR_SETTLE_US: u64 = 3;
+/// Time for the selected column to propagate through the matrix before sampling rows.
+const SR_COLUMN_SETTLE_US: u64 = 40;
 
 /// Keyboard matrix driven by 74HC595 shift registers.
 ///
@@ -179,10 +183,12 @@ impl<
                 // before the new one is driven.  This prevents residual charge on
                 // column traces from causing false row readings (ghosting).
                 self.clear_columns().await;
+                Timer::after(Duration::from_micros(SR_CLEAR_SETTLE_US)).await;
 
                 // Drive this column high via the shift register
                 let bitmask = Self::col_bitmask(col_idx);
                 self.latch(&bitmask[..Self::NUM_BYTES]).await;
+                Timer::after(Duration::from_micros(SR_COLUMN_SETTLE_US)).await;
 
                 let r_start = if col_idx == col_start { row_start } else { 0 };
 
@@ -274,30 +280,16 @@ impl<
 {
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {
-        // Drive all columns high so any key press triggers a row pin change
-        let all_high = {
-            let mut buf = [0xFFu8; SR_MAX_BYTES];
-            // Mask out unused bits in the last byte
-            let used_bits = COL % 8;
-            if used_bits != 0 {
-                buf[0] = (1u8 << used_bits) - 1;
-            }
-            buf
-        };
-        self.latch(&all_high[..Self::NUM_BYTES]).await;
-
-        // Wait for any row pin to go high (scoped to drop futs before clear_columns)
-        {
-            let mut futs: heapless::Vec<_, ROW> = self
-                .row_pins
-                .iter_mut()
-                .map(|pin| pin.wait_for_high())
-                .collect();
-            let _ =
-                embassy_futures::select::select_slice(core::pin::pin!(futs.as_mut_slice())).await;
-        }
-
-        // Clear outputs
+        // Unlike a GPIO matrix, a shift-register driven matrix does not have a
+        // safe passive "wake on key" state. Driving every column high while
+        // idle can create extra conduction paths on real boards with shared or
+        // asymmetric switch circuits, which shows up as ghosting even though
+        // the normal one-hot scan is correct.
+        //
+        // Keep the matrix fully discharged while idle and fall back to a short
+        // polling delay instead. This matches QMK/ZMK behavior more closely and
+        // avoids introducing board-specific artifacts during the idle phase.
         self.clear_columns().await;
+        Timer::after(Duration::from_millis(1)).await;
     }
 }
