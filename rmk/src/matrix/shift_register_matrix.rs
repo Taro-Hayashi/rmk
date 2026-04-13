@@ -1,0 +1,223 @@
+//! 74HC595 Shift Register Matrix
+//!
+//! A keyboard matrix implementation that uses SPI-connected 74HC595 shift
+//! registers as column drivers. Row pins are regular GPIO inputs.
+//!
+//! The 595 chain length is derived from `COL`: one 595 provides 8 outputs,
+//! so two daisy-chained 595s handle up to 16 columns, etc.
+//!
+//! # Wiring
+//!
+//! ```text
+//!   MCU                  74HC595 (xN)          Matrix
+//!   ---------------------------------------------------
+//!   SPI MOSI  ------->  SER (data in)
+//!   SPI SCK   ------->  SRCLK (shift clock)
+//!   CS / Latch ------>  RCLK (storage clock)    COL 0..N
+//!   GPIO In   <-------------------------------- ROW 0..M
+//! ```
+//!
+//! # Usage
+//!
+//! ```rust,ignore
+//! use rmk::matrix::shift_register_matrix::ShiftRegisterMatrix;
+//!
+//! let mut matrix = ShiftRegisterMatrix::<_, _, _, _, 2, 16>::new(
+//!     spi_bus,      // &Mutex<RawMutex, impl SpiBus>
+//!     latch_pin,    // impl OutputPin
+//!     row_pins,     // [impl InputPin; ROW]
+//!     debouncer,
+//! )
+//! .await;
+//! ```
+
+use embassy_time::Timer;
+use embassy_sync::mutex::Mutex;
+use embedded_hal::digital::{InputPin, OutputPin};
+#[cfg(feature = "async_matrix")]
+use embedded_hal_async::digital::Wait;
+use embedded_hal_async::spi::SpiBus;
+use rmk_macro::input_device;
+
+use crate::debounce::{DebounceState, DebouncerTrait};
+use crate::event::KeyboardEvent;
+use crate::matrix::{KeyState, MatrixTrait};
+
+const SR_MAX_BYTES: usize = 4;
+const SR_CLEAR_SETTLE_US: u64 = 3;
+const SR_COLUMN_SETTLE_US: u64 = 40;
+const SR_SCAN_INTERVAL_MS: u64 = 2;
+
+#[input_device(publish = KeyboardEvent)]
+pub struct ShiftRegisterMatrix<
+    SPI: SpiBus + 'static,
+    CS: OutputPin,
+    #[cfg(feature = "async_matrix")] In: Wait + InputPin,
+    #[cfg(not(feature = "async_matrix"))] In: InputPin,
+    D: DebouncerTrait<ROW, COL>,
+    const ROW: usize,
+    const COL: usize,
+    const ROW_OFFSET: usize = 0,
+    const COL_OFFSET: usize = 0,
+> {
+    spi: &'static Mutex<crate::RawMutex, SPI>,
+    cs: CS,
+    row_pins: [In; ROW],
+    debouncer: D,
+    key_states: [[KeyState; ROW]; COL],
+    scan_pos: (usize, usize),
+    #[cfg(feature = "async_matrix")]
+    rescan_needed: bool,
+}
+
+impl<
+    SPI: SpiBus + 'static,
+    CS: OutputPin,
+    #[cfg(not(feature = "async_matrix"))] In: InputPin,
+    #[cfg(feature = "async_matrix")] In: Wait + InputPin,
+    D: DebouncerTrait<ROW, COL>,
+    const ROW: usize,
+    const COL: usize,
+    const ROW_OFFSET: usize,
+    const COL_OFFSET: usize,
+> ShiftRegisterMatrix<SPI, CS, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
+{
+    const NUM_BYTES: usize = {
+        if COL > SR_MAX_BYTES * 8 {
+            panic!("ShiftRegisterMatrix supports up to 32 columns");
+        }
+        COL.div_ceil(8)
+    };
+
+    pub async fn new(
+        spi: &'static Mutex<crate::RawMutex, SPI>,
+        cs: CS,
+        row_pins: [In; ROW],
+        debouncer: D,
+    ) -> Self {
+        let mut matrix = Self {
+            spi,
+            cs,
+            row_pins,
+            debouncer,
+            key_states: [[KeyState::new(); ROW]; COL],
+            scan_pos: (0, 0),
+            #[cfg(feature = "async_matrix")]
+            rescan_needed: false,
+        };
+        matrix.clear_columns().await;
+        matrix
+    }
+
+    #[inline(always)]
+    fn latch_io_delay() {
+        for _ in 0..960 {
+            core::hint::spin_loop();
+        }
+    }
+
+    async fn latch(&mut self, data: &[u8]) {
+        let mut spi = self.spi.lock().await;
+        Self::latch_io_delay();
+        self.cs.set_low().ok();
+        Self::latch_io_delay();
+        let _ = spi.write(data).await;
+        Self::latch_io_delay();
+        self.cs.set_high().ok();
+        Self::latch_io_delay();
+    }
+
+    fn col_bitmask(col_idx: usize) -> [u8; SR_MAX_BYTES] {
+        let mut buf = [0u8; SR_MAX_BYTES];
+        let byte_pos = col_idx / 8;
+        let bit_pos = col_idx % 8;
+        buf[Self::NUM_BYTES - 1 - byte_pos] = 1 << bit_pos;
+        buf
+    }
+
+    async fn clear_columns(&mut self) {
+        let zeros = [0u8; SR_MAX_BYTES];
+        self.latch(&zeros[..Self::NUM_BYTES]).await;
+    }
+
+    async fn read_keyboard_event(&mut self) -> KeyboardEvent {
+        loop {
+            let (col_start, row_start) = self.scan_pos;
+
+            for col_idx in col_start..COL {
+                self.clear_columns().await;
+                Timer::after_micros(SR_CLEAR_SETTLE_US).await;
+
+                let bitmask = Self::col_bitmask(col_idx);
+                self.latch(&bitmask[..Self::NUM_BYTES]).await;
+                Timer::after_micros(SR_COLUMN_SETTLE_US).await;
+
+                let r_start = if col_idx == col_start { row_start } else { 0 };
+
+                for row_idx in r_start..ROW {
+                    let pin_high = self.row_pins[row_idx].is_high().ok().unwrap_or(false);
+
+                    let debounce_state = self.debouncer.detect_change_with_debounce(
+                        row_idx,
+                        col_idx,
+                        pin_high,
+                        &self.key_states[col_idx][row_idx],
+                    );
+
+                    if let DebounceState::Debounced = debounce_state {
+                        self.key_states[col_idx][row_idx].toggle_pressed();
+                        self.scan_pos = (col_idx, row_idx);
+                        #[cfg(feature = "async_matrix")]
+                        {
+                            self.rescan_needed = true;
+                        }
+                        self.clear_columns().await;
+                        return KeyboardEvent::key(
+                            (row_idx + ROW_OFFSET) as u8,
+                            (col_idx + COL_OFFSET) as u8,
+                            self.key_states[col_idx][row_idx].pressed,
+                        );
+                    }
+
+                    #[cfg(feature = "async_matrix")]
+                    if self.key_states[col_idx][row_idx].pressed {
+                        self.rescan_needed = true;
+                    }
+                }
+            }
+
+            self.clear_columns().await;
+
+            #[cfg(feature = "async_matrix")]
+            {
+                if !self.rescan_needed {
+                    self.wait_for_key().await;
+                }
+                self.rescan_needed = false;
+            }
+
+            Timer::after_millis(SR_SCAN_INTERVAL_MS).await;
+
+            self.scan_pos = (0, 0);
+        }
+    }
+}
+
+impl<
+    SPI: SpiBus + 'static,
+    CS: OutputPin,
+    #[cfg(not(feature = "async_matrix"))] In: InputPin,
+    #[cfg(feature = "async_matrix")] In: Wait + InputPin,
+    D: DebouncerTrait<ROW, COL>,
+    const ROW: usize,
+    const COL: usize,
+    const ROW_OFFSET: usize,
+    const COL_OFFSET: usize,
+> MatrixTrait<ROW, COL> for ShiftRegisterMatrix<SPI, CS, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
+{
+    #[cfg(feature = "async_matrix")]
+    async fn wait_for_key(&mut self) {
+        self.clear_columns().await;
+        Timer::after_millis(SR_SCAN_INTERVAL_MS).await;
+    }
+}

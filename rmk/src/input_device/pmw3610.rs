@@ -4,9 +4,9 @@
 //! https://github.com/zephyrproject-rtos/zephyr/blob/d31c6e95033fd6b3763389edba6a655245ae1328/drivers/input/input_pmw3610.c
 
 use embassy_time::{Duration, Instant, Timer};
-use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::digital::InputPin;
 use embedded_hal_async::digital::Wait;
-use embedded_hal_async::spi::SpiBus;
+use embedded_hal_async::spi::{Operation, SpiDevice};
 
 pub use crate::driver::bitbang_spi::{BitBangError, BitBangSpiBus};
 use crate::input_device::pointing::{InitState, MotionData, PointingDevice, PointingDriver, PointingDriverError};
@@ -171,22 +171,20 @@ impl From<Pmw3610Error> for PointingDriverError {
 }
 
 /// PMW3610 driver using embedded-hal SPI traits
-pub struct Pmw3610<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> {
+pub struct Pmw3610<SPI: SpiDevice<u8>, MOTION: InputPin + Wait> {
     id: u8,
     spi: SPI,
-    cs: CS,
     motion_gpio: Option<MOTION>,
     config: Pmw3610Config,
     smart_flag: bool,
 }
 
-impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTION> {
+impl<SPI: SpiDevice<u8>, MOTION: InputPin + Wait> Pmw3610<SPI, MOTION> {
     /// Create a new PMW3610 driver instance
-    pub fn new(id: u8, spi: SPI, cs: CS, motion_gpio: Option<MOTION>, config: Pmw3610Config) -> Self {
+    pub fn new(id: u8, spi: SPI, motion_gpio: Option<MOTION>, config: Pmw3610Config) -> Self {
         Self {
             id,
             spi,
-            cs,
             motion_gpio,
             config,
             smart_flag: false,
@@ -219,49 +217,42 @@ impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTIO
     }
 
     async fn read_reg(&mut self, addr: u8) -> Result<u8, Pmw3610Error> {
-        let _ = self.cs.set_low();
-        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
-
-        self.spi.write(&[addr & 0x7f]).await.map_err(|_| Pmw3610Error::Spi)?;
-
-        Self::busy_delay(Duration::from_micros(T_SRAD_US));
-
         let mut value = [0u8];
-        self.spi.read(&mut value).await.map_err(|_| Pmw3610Error::Spi)?;
-
-        Self::busy_delay(Duration::from_nanos(T_SCLK_NCS_R_NS));
-        let _ = self.cs.set_high();
+        let tx = [addr & 0x7f];
+        let mut ops = [
+            Operation::DelayNs(T_NCS_SCLK_NS as u32),
+            Operation::Write(&tx),
+            Operation::DelayNs((T_SRAD_US * 1_000) as u32),
+            Operation::Read(&mut value),
+            Operation::DelayNs(T_SCLK_NCS_R_NS as u32),
+        ];
+        self.spi.transaction(&mut ops).await.map_err(|_| Pmw3610Error::Spi)?;
 
         Ok(value[0])
     }
 
     async fn read_burst(&mut self, addr: u8, data: &mut [u8]) -> Result<(), Pmw3610Error> {
-        let _ = self.cs.set_low();
-        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
-
-        self.spi.write(&[addr & 0x7f]).await.map_err(|_| Pmw3610Error::Spi)?;
-
-        Self::busy_delay(Duration::from_micros(T_SRAD_US));
-
-        self.spi.read(data).await.map_err(|_| Pmw3610Error::Spi)?;
-
-        Self::busy_delay(Duration::from_nanos(T_SCLK_NCS_R_NS));
-        let _ = self.cs.set_high();
+        let tx = [addr & 0x7f];
+        let mut ops = [
+            Operation::DelayNs(T_NCS_SCLK_NS as u32),
+            Operation::Write(&tx),
+            Operation::DelayNs((T_SRAD_US * 1_000) as u32),
+            Operation::Read(data),
+            Operation::DelayNs(T_SCLK_NCS_R_NS as u32),
+        ];
+        self.spi.transaction(&mut ops).await.map_err(|_| Pmw3610Error::Spi)?;
 
         Ok(())
     }
 
     async fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Pmw3610Error> {
-        let _ = self.cs.set_low();
-        Self::busy_delay(Duration::from_nanos(T_NCS_SCLK_NS));
-
-        self.spi
-            .write(&[addr | SPI_WRITE, value])
-            .await
-            .map_err(|_| Pmw3610Error::Spi)?;
-
-        Self::busy_delay(Duration::from_micros(T_SCLK_NCS_W_US));
-        let _ = self.cs.set_high();
+        let tx = [addr | SPI_WRITE, value];
+        let mut ops = [
+            Operation::DelayNs(T_NCS_SCLK_NS as u32),
+            Operation::Write(&tx),
+            Operation::DelayNs((T_SCLK_NCS_W_US * 1_000) as u32),
+        ];
+        self.spi.transaction(&mut ops).await.map_err(|_| Pmw3610Error::Spi)?;
 
         Timer::after(Duration::from_micros(T_SWX_US)).await;
 
@@ -360,17 +351,15 @@ impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTIO
     }
 }
 
-impl<SPI, CS, MOTION> PointingDriver for Pmw3610<SPI, CS, MOTION>
+impl<SPI, MOTION> PointingDriver for Pmw3610<SPI, MOTION>
 where
-    SPI: SpiBus,
-    CS: OutputPin,
+    SPI: SpiDevice<u8>,
     MOTION: InputPin + Wait,
 {
     type MOTION = MOTION;
 
     /// Initialize the sensor (public API)
     async fn init(&mut self) -> Result<(), PointingDriverError> {
-        let _ = self.cs.set_high();
         Timer::after(Duration::from_millis(1)).await;
 
         self.configure().await?;
@@ -458,33 +447,23 @@ where
     }
 }
 
-impl<SPI, CS, MOTION> PointingDevice<Pmw3610<SPI, CS, MOTION>>
+impl<SPI, MOTION> PointingDevice<Pmw3610<SPI, MOTION>>
 where
-    SPI: SpiBus,
-    CS: OutputPin,
+    SPI: SpiDevice<u8>,
     MOTION: InputPin + Wait,
 {
     const DEFAULT_POLL_INTERVAL_US: u64 = 500;
     const DEFAULT_REPORT_HZ: u16 = 125;
 
     /// Create a new PMW3610 device
-    pub fn new(id: u8, spi: SPI, cs: CS, motion_gpio: Option<MOTION>, sensor_config: Pmw3610Config) -> Self {
-        Self::with_poll_interval_and_report_hz(
-            id,
-            spi,
-            cs,
-            motion_gpio,
-            sensor_config,
-            Self::DEFAULT_POLL_INTERVAL_US,
-            Self::DEFAULT_REPORT_HZ,
-        )
+    pub fn new(id: u8, spi: SPI, motion_gpio: Option<MOTION>, sensor_config: Pmw3610Config) -> Self {
+        Self::with_poll_interval_and_report_hz(id, spi, motion_gpio, sensor_config, Self::DEFAULT_POLL_INTERVAL_US, Self::DEFAULT_REPORT_HZ)
     }
 
     /// Create a new PMW3610 device with custom report rate (Hz)
     pub fn with_report_hz(
         id: u8,
         spi: SPI,
-        cs: CS,
         motion_gpio: Option<MOTION>,
         sensor_config: Pmw3610Config,
         report_hz: u16,
@@ -492,7 +471,6 @@ where
         Self::with_poll_interval_and_report_hz(
             id,
             spi,
-            cs,
             motion_gpio,
             sensor_config,
             Self::DEFAULT_POLL_INTERVAL_US,
@@ -504,7 +482,6 @@ where
     pub fn with_poll_interval(
         id: u8,
         spi: SPI,
-        cs: CS,
         motion_gpio: Option<MOTION>,
         sensor_config: Pmw3610Config,
         poll_interval_us: u64,
@@ -512,7 +489,6 @@ where
         Self::with_poll_interval_and_report_hz(
             id,
             spi,
-            cs,
             motion_gpio,
             sensor_config,
             poll_interval_us,
@@ -524,7 +500,6 @@ where
     pub fn with_poll_interval_and_report_hz(
         id: u8,
         spi: SPI,
-        cs: CS,
         motion_gpio: Option<MOTION>,
         sensor_config: Pmw3610Config,
         poll_interval_us: u64,
@@ -537,7 +512,7 @@ where
 
         Self {
             id,
-            sensor: Pmw3610::new(id, spi, cs, motion_gpio, sensor_config),
+            sensor: Pmw3610::new(id, spi, motion_gpio, sensor_config),
             init_state: InitState::Pending,
             poll_interval,
             report_interval,
