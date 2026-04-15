@@ -457,7 +457,14 @@ where
 
     /// Create a new PMW3610 device
     pub fn new(id: u8, spi: SPI, motion_gpio: Option<MOTION>, sensor_config: Pmw3610Config) -> Self {
-        Self::with_poll_interval_and_report_hz(id, spi, motion_gpio, sensor_config, Self::DEFAULT_POLL_INTERVAL_US, Self::DEFAULT_REPORT_HZ)
+        Self::with_poll_interval_and_report_hz(
+            id,
+            spi,
+            motion_gpio,
+            sensor_config,
+            Self::DEFAULT_POLL_INTERVAL_US,
+            Self::DEFAULT_REPORT_HZ,
+        )
     }
 
     /// Create a new PMW3610 device with custom report rate (Hz)

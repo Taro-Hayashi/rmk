@@ -20,10 +20,10 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use rmk::matrix::shift_register_matrix::ShiftRegisterMatrix;
+//! use rmk::matrix::hc595_matrix::Hc595Matrix;
 //!
-//! let mut matrix = ShiftRegisterMatrix::<_, _, _, _, 2, 16>::new(
-//!     spi_bus,      // &Mutex<RawMutex, impl SpiBus>
+//! let mut matrix = Hc595Matrix::<_, _, _, _, 2, 16>::new(
+//!     spi_device,   // impl SpiDevice<u8>
 //!     latch_pin,    // impl OutputPin
 //!     row_pins,     // [impl InputPin; ROW]
 //!     debouncer,
@@ -32,11 +32,10 @@
 //! ```
 
 use embassy_time::Timer;
-use embassy_sync::mutex::Mutex;
 use embedded_hal::digital::{InputPin, OutputPin};
 #[cfg(feature = "async_matrix")]
 use embedded_hal_async::digital::Wait;
-use embedded_hal_async::spi::SpiBus;
+use embedded_hal_async::spi::SpiDevice;
 use rmk_macro::input_device;
 
 use crate::debounce::{DebounceState, DebouncerTrait};
@@ -44,14 +43,38 @@ use crate::event::KeyboardEvent;
 use crate::matrix::{KeyState, MatrixTrait};
 
 const SR_MAX_BYTES: usize = 4;
-const SR_CLEAR_SETTLE_US: u64 = 3;
-const SR_COLUMN_SETTLE_US: u64 = 40;
+const SR_CLEAR_SETTLE_US: u64 = 10;
+const SR_COLUMN_SETTLE_US: u64 = 80;
 const SR_SCAN_INTERVAL_MS: u64 = 2;
 
+struct ShiftRegisterWriter<SPI: SpiDevice<u8>, LATCH: OutputPin> {
+    spi: SPI,
+    latch: LATCH,
+}
+
+impl<SPI: SpiDevice<u8>, LATCH: OutputPin> ShiftRegisterWriter<SPI, LATCH> {
+    #[inline(always)]
+    fn latch_io_delay() {
+        for _ in 0..960 {
+            core::hint::spin_loop();
+        }
+    }
+
+    async fn write_columns(&mut self, data: &[u8]) {
+        Self::latch_io_delay();
+        self.latch.set_low().ok();
+        Self::latch_io_delay();
+        let _ = self.spi.write(data).await;
+        Self::latch_io_delay();
+        self.latch.set_high().ok();
+        Self::latch_io_delay();
+    }
+}
+
 #[input_device(publish = KeyboardEvent)]
-pub struct ShiftRegisterMatrix<
-    SPI: SpiBus + 'static,
-    CS: OutputPin,
+pub struct Hc595Matrix<
+    SPI: SpiDevice<u8>,
+    LATCH: OutputPin,
     #[cfg(feature = "async_matrix")] In: Wait + InputPin,
     #[cfg(not(feature = "async_matrix"))] In: InputPin,
     D: DebouncerTrait<ROW, COL>,
@@ -60,8 +83,7 @@ pub struct ShiftRegisterMatrix<
     const ROW_OFFSET: usize = 0,
     const COL_OFFSET: usize = 0,
 > {
-    spi: &'static Mutex<crate::RawMutex, SPI>,
-    cs: CS,
+    writer: ShiftRegisterWriter<SPI, LATCH>,
     row_pins: [In; ROW],
     debouncer: D,
     key_states: [[KeyState; ROW]; COL],
@@ -71,8 +93,8 @@ pub struct ShiftRegisterMatrix<
 }
 
 impl<
-    SPI: SpiBus + 'static,
-    CS: OutputPin,
+    SPI: SpiDevice<u8>,
+    LATCH: OutputPin,
     #[cfg(not(feature = "async_matrix"))] In: InputPin,
     #[cfg(feature = "async_matrix")] In: Wait + InputPin,
     D: DebouncerTrait<ROW, COL>,
@@ -80,24 +102,18 @@ impl<
     const COL: usize,
     const ROW_OFFSET: usize,
     const COL_OFFSET: usize,
-> ShiftRegisterMatrix<SPI, CS, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
+> Hc595Matrix<SPI, LATCH, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
 {
     const NUM_BYTES: usize = {
         if COL > SR_MAX_BYTES * 8 {
-            panic!("ShiftRegisterMatrix supports up to 32 columns");
+            panic!("Hc595Matrix supports up to 32 columns");
         }
         COL.div_ceil(8)
     };
 
-    pub async fn new(
-        spi: &'static Mutex<crate::RawMutex, SPI>,
-        cs: CS,
-        row_pins: [In; ROW],
-        debouncer: D,
-    ) -> Self {
+    pub async fn new(spi: SPI, latch: LATCH, row_pins: [In; ROW], debouncer: D) -> Self {
         let mut matrix = Self {
-            spi,
-            cs,
+            writer: ShiftRegisterWriter { spi, latch },
             row_pins,
             debouncer,
             key_states: [[KeyState::new(); ROW]; COL],
@@ -107,24 +123,6 @@ impl<
         };
         matrix.clear_columns().await;
         matrix
-    }
-
-    #[inline(always)]
-    fn latch_io_delay() {
-        for _ in 0..960 {
-            core::hint::spin_loop();
-        }
-    }
-
-    async fn latch(&mut self, data: &[u8]) {
-        let mut spi = self.spi.lock().await;
-        Self::latch_io_delay();
-        self.cs.set_low().ok();
-        Self::latch_io_delay();
-        let _ = spi.write(data).await;
-        Self::latch_io_delay();
-        self.cs.set_high().ok();
-        Self::latch_io_delay();
     }
 
     fn col_bitmask(col_idx: usize) -> [u8; SR_MAX_BYTES] {
@@ -137,7 +135,7 @@ impl<
 
     async fn clear_columns(&mut self) {
         let zeros = [0u8; SR_MAX_BYTES];
-        self.latch(&zeros[..Self::NUM_BYTES]).await;
+        self.writer.write_columns(&zeros[..Self::NUM_BYTES]).await;
     }
 
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
@@ -149,7 +147,7 @@ impl<
                 Timer::after_micros(SR_CLEAR_SETTLE_US).await;
 
                 let bitmask = Self::col_bitmask(col_idx);
-                self.latch(&bitmask[..Self::NUM_BYTES]).await;
+                self.writer.write_columns(&bitmask[..Self::NUM_BYTES]).await;
                 Timer::after_micros(SR_COLUMN_SETTLE_US).await;
 
                 let r_start = if col_idx == col_start { row_start } else { 0 };
@@ -204,8 +202,8 @@ impl<
 }
 
 impl<
-    SPI: SpiBus + 'static,
-    CS: OutputPin,
+    SPI: SpiDevice<u8>,
+    LATCH: OutputPin,
     #[cfg(not(feature = "async_matrix"))] In: InputPin,
     #[cfg(feature = "async_matrix")] In: Wait + InputPin,
     D: DebouncerTrait<ROW, COL>,
@@ -213,7 +211,7 @@ impl<
     const COL: usize,
     const ROW_OFFSET: usize,
     const COL_OFFSET: usize,
-> MatrixTrait<ROW, COL> for ShiftRegisterMatrix<SPI, CS, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
+> MatrixTrait<ROW, COL> for Hc595Matrix<SPI, LATCH, In, D, ROW, COL, ROW_OFFSET, COL_OFFSET>
 {
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {
