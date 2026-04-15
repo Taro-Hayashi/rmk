@@ -263,6 +263,9 @@ pub struct PointingProcessorConfig {
     pub scroll_invert_wheel: bool,
     /// Invert scroll pan direction (applied only when scrolling).
     pub scroll_invert_pan: bool,
+    /// Divisor applied to scroll deltas (1 = raw, larger = slower). 0 is treated as 1.
+    /// The leftover remainder is carried across reports so slow motion still registers.
+    pub scroll_divisor: u8,
 }
 
 /// PointingProcessor that converts motion events to mouse reports
@@ -271,12 +274,19 @@ pub struct PointingProcessor<'a> {
     /// Reference to the keymap
     keymap: &'a KeyMap<'a>,
     config: PointingProcessorConfig,
+    scroll_remainder_wheel: i16,
+    scroll_remainder_pan: i16,
 }
 
 impl<'a> PointingProcessor<'a> {
     /// Create a new pointing processor with default settings
     pub fn new(keymap: &'a KeyMap<'a>, config: PointingProcessorConfig) -> Self {
-        Self { keymap, config }
+        Self {
+            keymap,
+            config,
+            scroll_remainder_wheel: 0,
+            scroll_remainder_pan: 0,
+        }
     }
 
     async fn on_pointing_event(&mut self, event: PointingEvent) {
@@ -307,8 +317,15 @@ impl<'a> PointingProcessor<'a> {
             None => false,
         };
         let mouse_report = if scrolling {
-            let wheel = if self.config.scroll_invert_wheel { y } else { -y };
-            let pan = if self.config.scroll_invert_pan { -x } else { x };
+            let wheel_raw = if self.config.scroll_invert_wheel { y } else { -y };
+            let pan_raw = if self.config.scroll_invert_pan { -x } else { x };
+            let divisor = self.config.scroll_divisor.max(1) as i16;
+            let wheel_total = (self.scroll_remainder_wheel as i32) + (wheel_raw as i32);
+            let pan_total = (self.scroll_remainder_pan as i32) + (pan_raw as i32);
+            let wheel = (wheel_total / divisor as i32) as i16;
+            let pan = (pan_total / divisor as i32) as i16;
+            self.scroll_remainder_wheel = (wheel_total - (wheel as i32) * (divisor as i32)) as i16;
+            self.scroll_remainder_pan = (pan_total - (pan as i32) * (divisor as i32)) as i16;
             MouseReport {
                 buttons,
                 x: 0,
@@ -317,6 +334,8 @@ impl<'a> PointingProcessor<'a> {
                 pan: pan.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
             }
         } else {
+            self.scroll_remainder_wheel = 0;
+            self.scroll_remainder_pan = 0;
             MouseReport {
                 buttons,
                 x: x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
