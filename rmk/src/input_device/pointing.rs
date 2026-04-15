@@ -257,6 +257,12 @@ pub struct PointingProcessorConfig {
     pub invert_y: bool,
     /// Swap X and Y axes
     pub swap_xy: bool,
+    /// When the active layer matches, emit scroll (wheel/pan) instead of cursor motion.
+    pub scroll_layer: Option<u8>,
+    /// Invert scroll wheel direction (applied only when scrolling).
+    pub scroll_invert_wheel: bool,
+    /// Invert scroll pan direction (applied only when scrolling).
+    pub scroll_invert_pan: bool,
 }
 
 /// PointingProcessor that converts motion events to mouse reports
@@ -296,12 +302,28 @@ impl<'a> PointingProcessor<'a> {
         }
 
         let buttons = self.keymap.mouse_buttons();
-        let mouse_report = MouseReport {
-            buttons,
-            x: x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
-            y: y.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
-            wheel: 0,
-            pan: 0,
+        let scrolling = match self.config.scroll_layer {
+            Some(layer) => self.keymap.get_activated_layer() == layer,
+            None => false,
+        };
+        let mouse_report = if scrolling {
+            let wheel = if self.config.scroll_invert_wheel { y } else { -y };
+            let pan = if self.config.scroll_invert_pan { -x } else { x };
+            MouseReport {
+                buttons,
+                x: 0,
+                y: 0,
+                wheel: wheel.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                pan: pan.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+            }
+        } else {
+            MouseReport {
+                buttons,
+                x: x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                y: y.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                wheel: 0,
+                pan: 0,
+            }
         };
         KEYBOARD_REPORT_CHANNEL.send(Report::MouseReport(mouse_report)).await;
     }

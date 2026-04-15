@@ -453,7 +453,7 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().toggle_layer(layer_num);
     }
 
-    pub(crate) fn get_activated_layer(&self) -> u8 {
+    pub fn get_activated_layer(&self) -> u8 {
         self.inner.borrow().get_activated_layer()
     }
 
