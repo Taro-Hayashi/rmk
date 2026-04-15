@@ -1511,6 +1511,10 @@ impl<'a> Keyboard<'a> {
     async fn process_user(&mut self, id: u8, event: KeyboardEvent) {
         debug!("Processing user key id: {:?}, event: {:?}", id, event);
 
+        // Broadcast the raw user key event so downstream code can subscribe.
+        let _ = crate::channel::USER_KEY_EVENT_CHANNEL
+            .try_send(crate::channel::UserKeyEvent { id, pressed: event.pressed });
+
         #[cfg(feature = "_ble")]
         {
             use crate::NUM_BLE_PROFILE;

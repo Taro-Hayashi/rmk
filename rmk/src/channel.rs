@@ -16,6 +16,18 @@ pub(crate) static LED_SIGNAL: Signal<RawMutex, LedIndicator> = Signal::new();
 /// Channel for keyboard report from input processors to hid writer/reader
 pub static KEYBOARD_REPORT_CHANNEL: Channel<RawMutex, Report, REPORT_CHANNEL_SIZE> = Channel::new();
 
+/// User key event: (user key id, pressed).
+/// Published from the keyboard loop for every User(id) action so downstream
+/// code (input processors, user-side tasks) can react to custom keycodes.
+pub static USER_KEY_EVENT_CHANNEL: Channel<RawMutex, UserKeyEvent, 4> = Channel::new();
+
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct UserKeyEvent {
+    pub id: u8,
+    pub pressed: bool,
+}
+
 // Sync messages from server to flash
 #[cfg(feature = "storage")]
 pub(crate) static FLASH_CHANNEL: Channel<RawMutex, FlashOperationMessage, FLASH_CHANNEL_SIZE> = Channel::new();

@@ -1,11 +1,19 @@
 //! Common functionality across pointing devices
 
+use core::cell::Cell;
+
+use embassy_sync::blocking_mutex::Mutex;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal::digital::InputPin;
 use embedded_hal_async::digital::Wait;
 use futures::future::pending;
 use rmk_macro::{input_device, processor};
 use usbd_hid::descriptor::MouseReport;
+
+#[cfg(not(any(cortex_m)))]
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as RawMutex;
+#[cfg(cortex_m)]
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex as RawMutex;
 
 use crate::channel::KEYBOARD_REPORT_CHANNEL;
 use crate::event::{Axis, AxisEvent, AxisValType, PointingEvent, PointingSetCpiEvent};
@@ -268,12 +276,69 @@ pub struct PointingProcessorConfig {
     pub scroll_divisor: u8,
 }
 
+/// Runtime-mutable pointing state. Wrap in [`PointingRuntimeStateCell`] for
+/// shared interior mutability between `PointingProcessor` and user tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointingRuntimeState {
+    /// When false, cursor-mode motion is suppressed (zeros sent). Scroll still works.
+    pub cursor_enabled: bool,
+    /// Divisor applied to scroll deltas (1 = raw, larger = slower). 0 treated as 1.
+    pub scroll_divisor: u8,
+    /// Invert scroll wheel direction.
+    pub scroll_invert_wheel: bool,
+    /// Invert scroll pan direction.
+    pub scroll_invert_pan: bool,
+}
+
+impl Default for PointingRuntimeState {
+    fn default() -> Self {
+        Self {
+            cursor_enabled: true,
+            scroll_divisor: 1,
+            scroll_invert_wheel: false,
+            scroll_invert_pan: false,
+        }
+    }
+}
+
+/// Shared cell for [`PointingRuntimeState`] that can be read by the pointing
+/// processor and mutated from user code via [`Self::update`].
+pub struct PointingRuntimeStateCell {
+    inner: Mutex<RawMutex, Cell<PointingRuntimeState>>,
+}
+
+impl PointingRuntimeStateCell {
+    pub const fn new(initial: PointingRuntimeState) -> Self {
+        Self { inner: Mutex::new(Cell::new(initial)) }
+    }
+
+    pub fn get(&self) -> PointingRuntimeState {
+        self.inner.lock(|c| c.get())
+    }
+
+    pub fn set(&self, value: PointingRuntimeState) {
+        self.inner.lock(|c| c.set(value));
+    }
+
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnOnce(&mut PointingRuntimeState),
+    {
+        self.inner.lock(|c| {
+            let mut s = c.get();
+            f(&mut s);
+            c.set(s);
+        });
+    }
+}
+
 /// PointingProcessor that converts motion events to mouse reports
 #[processor(subscribe = [PointingEvent])]
 pub struct PointingProcessor<'a> {
     /// Reference to the keymap
     keymap: &'a KeyMap<'a>,
     config: PointingProcessorConfig,
+    runtime: Option<&'a PointingRuntimeStateCell>,
     scroll_remainder_wheel: i16,
     scroll_remainder_pan: i16,
 }
@@ -284,8 +349,28 @@ impl<'a> PointingProcessor<'a> {
         Self {
             keymap,
             config,
+            runtime: None,
             scroll_remainder_wheel: 0,
             scroll_remainder_pan: 0,
+        }
+    }
+
+    /// Attach a shared runtime state cell. Subsequent reports consult the
+    /// cell each time, so user code can mutate it freely via [`PointingRuntimeStateCell::update`].
+    pub fn with_runtime_state(mut self, state: &'a PointingRuntimeStateCell) -> Self {
+        self.runtime = Some(state);
+        self
+    }
+
+    fn effective_state(&self) -> PointingRuntimeState {
+        match self.runtime {
+            Some(cell) => cell.get(),
+            None => PointingRuntimeState {
+                cursor_enabled: true,
+                scroll_divisor: self.config.scroll_divisor,
+                scroll_invert_wheel: self.config.scroll_invert_wheel,
+                scroll_invert_pan: self.config.scroll_invert_pan,
+            },
         }
     }
 
@@ -312,14 +397,15 @@ impl<'a> PointingProcessor<'a> {
         }
 
         let buttons = self.keymap.mouse_buttons();
+        let state = self.effective_state();
         let scrolling = match self.config.scroll_layer {
             Some(layer) => self.keymap.get_activated_layer() == layer,
             None => false,
         };
         let mouse_report = if scrolling {
-            let wheel_raw = if self.config.scroll_invert_wheel { y } else { -y };
-            let pan_raw = if self.config.scroll_invert_pan { -x } else { x };
-            let divisor = self.config.scroll_divisor.max(1) as i16;
+            let wheel_raw = if state.scroll_invert_wheel { y } else { -y };
+            let pan_raw = if state.scroll_invert_pan { -x } else { x };
+            let divisor = state.scroll_divisor.max(1) as i16;
             let wheel_total = (self.scroll_remainder_wheel as i32) + (wheel_raw as i32);
             let pan_total = (self.scroll_remainder_pan as i32) + (pan_raw as i32);
             let wheel = (wheel_total / divisor as i32) as i16;
@@ -336,6 +422,9 @@ impl<'a> PointingProcessor<'a> {
         } else {
             self.scroll_remainder_wheel = 0;
             self.scroll_remainder_pan = 0;
+            if !state.cursor_enabled {
+                return;
+            }
             MouseReport {
                 buttons,
                 x: x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
