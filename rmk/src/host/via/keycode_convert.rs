@@ -86,7 +86,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 SpecialKey::GraveEscape => 0x7c16,
                 SpecialKey::Repeat => 0x7c79,
             },
-            Action::User(id) => (id as u16 & 0xF) | 0x7E00,
+            Action::User(id) => (id as u16 & 0x1F) | 0x7E00,
             _ => {
                 warn!("Action: {:?} in vial is not supported yet", a);
                 0
@@ -227,9 +227,9 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             );
             KeyAction::No
         }
-        0x7E00..=0x7E0F => {
-            // QK_KB_N, aka UserN
-            KeyAction::Single(Action::User(via_keycode as u8 & 0xF))
+        0x7E00..=0x7E1F => {
+            // QK_KB_N, aka UserN (32 slots, matches QMK QK_KB_0..QK_KB_31)
+            KeyAction::Single(Action::User(via_keycode as u8 & 0x1F))
         }
         _ => {
             warn!("Via keycode {:#X} is not processed", via_keycode);
