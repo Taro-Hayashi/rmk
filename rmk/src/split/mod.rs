@@ -38,8 +38,6 @@ pub(crate) enum SplitMessage {
     Address([u8; 6]),
     /// Clear the saved peer info
     ClearPeer,
-    /// Enter the peripheral bootloader
-    Bootloader,
     /// Lock state led indicator from central to peripheral
     KeyboardIndicator(u8),
     /// Layer number from central to peripheral
@@ -56,4 +54,6 @@ pub(crate) enum SplitMessage {
     /// Battery status, from peripheral to central
     #[cfg(feature = "_ble")]
     BatteryStatus(BatteryStatusEvent),
+    /// Enter the peripheral bootloader
+    Bootloader,
 }
