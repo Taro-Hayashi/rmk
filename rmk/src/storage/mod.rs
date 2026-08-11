@@ -293,7 +293,7 @@ pub(crate) struct LocalStorageConfig {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct LayoutConfig {
     pub(crate) default_layer: u8,
-    layout_option: u32,
+    pub(crate) layout_option: u32,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, MaxSize)]

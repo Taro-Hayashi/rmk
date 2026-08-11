@@ -33,6 +33,8 @@ pub struct KeymapData<const ROW: usize, const COL: usize, const NUM_LAYER: usize
     layer_cache: [[u8; COL]; ROW],
     /// Layer cache for encoder directions
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
+    /// VIA/Vial physical layout option bitfield.
+    pub(crate) layout_options: u32,
 }
 
 impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW, COL, NUM_LAYER, 0> {
@@ -44,6 +46,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW,
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [],
+            layout_options: 0,
         }
     }
 }
@@ -62,6 +65,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
+            layout_options: 0,
         }
     }
 }
@@ -102,6 +106,8 @@ struct KeyMapInner<'a> {
     hand: &'a [Hand],
     /// Mouse button state
     mouse_buttons: u8,
+    /// VIA/Vial physical layout option bitfield.
+    layout_options: u32,
     /// Matrix state for vial lock
     #[cfg(feature = "host_security")]
     matrix_state: MatrixState,
@@ -367,6 +373,7 @@ impl<'a> KeyMap<'a> {
                 behavior,
                 hand,
                 mouse_buttons: 0,
+                layout_options: data.layout_options,
                 #[cfg(feature = "host_security")]
                 matrix_state: MatrixState::new(ROW, COL),
             }),
@@ -531,6 +538,14 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn set_default_layer(&self, layer_num: u8) {
         self.inner.borrow_mut().set_default_layer(layer_num);
+    }
+
+    pub(crate) fn layout_options(&self) -> u32 {
+        self.inner.borrow().layout_options
+    }
+
+    pub(crate) fn set_layout_options(&self, options: u32) {
+        self.inner.borrow_mut().layout_options = options;
     }
 
     pub(crate) fn update_fn_layer_state(&self) {
@@ -874,5 +889,20 @@ mod test {
         assert!(!(self_activated && !keymap.is_layer_active(2)));
         keymap.deactivate_layer_if_active(2);
         assert!(self_activated && !keymap.is_layer_active(2));
+    }
+
+    #[test]
+    fn layout_options_round_trip_in_live_keymap() {
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::keymap::{KeyMap, KeymapData};
+
+        let mut data = KeymapData::<1, 1, 1>::new([[[k!(A)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        assert_eq!(keymap.layout_options(), 0);
+        keymap.set_layout_options(0x0102_0304);
+        assert_eq!(keymap.layout_options(), 0x0102_0304);
     }
 }
