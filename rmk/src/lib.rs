@@ -136,7 +136,15 @@ pub async fn initialize_keymap_and_storage<
             } else {
                 None
             };
-            Storage::new(flash, &data.keymap, &encoder_opt, storage_config, behavior_config).await
+            Storage::new(
+                flash,
+                &data.keymap,
+                &encoder_opt,
+                data.layout_options,
+                storage_config,
+                behavior_config,
+            )
+            .await
         };
 
         let keymap = KeyMap::new_from_storage(data, Some(&mut storage), behavior_config, positional_config).await;

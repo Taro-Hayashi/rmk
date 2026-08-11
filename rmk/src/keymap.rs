@@ -68,6 +68,12 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layout_options: 0,
         }
     }
+
+    /// Set the default VIA/Vial physical layout option bitfield.
+    pub const fn with_layout_options(mut self, layout_options: u32) -> Self {
+        self.layout_options = layout_options;
+        self
+    }
 }
 
 /// fills up the vector to its capacity
@@ -904,5 +910,12 @@ mod test {
         assert_eq!(keymap.layout_options(), 0);
         keymap.set_layout_options(0x0102_0304);
         assert_eq!(keymap.layout_options(), 0x0102_0304);
+    }
+
+    #[test]
+    fn keymap_data_accepts_default_layout_options() {
+        let data = KeymapData::<1, 1, 1>::new([[[k!(A)]]]).with_layout_options(0b10);
+
+        assert_eq!(data.layout_options, 0b10);
     }
 }

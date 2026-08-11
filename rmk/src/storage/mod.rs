@@ -356,6 +356,8 @@ pub async fn new_storage_for_split_peripheral<F: AsyncNorFlash>(
         &[],
         #[cfg(feature = "host")]
         &None,
+        #[cfg(feature = "host")]
+        0,
         &storage_config,
         &config::BehaviorConfig::default(),
     )
@@ -408,6 +410,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         flash: F,
         #[cfg(feature = "host")] keymap: &[[[KeyAction; COL]; ROW]; NUM_LAYER],
         #[cfg(feature = "host")] encoder_map: &Option<&mut [[EncoderAction; NUM_ENCODER]; NUM_LAYER]>,
+        #[cfg(feature = "host")] default_layout_options: u32,
         storage_config: &StorageConfig,
         behavior_config: &config::BehaviorConfig,
     ) -> Self {
@@ -469,6 +472,8 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     keymap,
                     #[cfg(feature = "host")]
                     encoder_map,
+                    #[cfg(feature = "host")]
+                    default_layout_options,
                     behavior_config,
                 )
                 .await
@@ -491,7 +496,9 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             {
                 debug!("clear_layout=true; overwriting layout items without erase.");
                 let encoder_map = encoder_map.as_ref().map(|m| &**m);
-                let _ = storage.reset_layout_only(keymap, &encoder_map, behavior_config).await;
+                let _ = storage
+                    .reset_layout_only(keymap, &encoder_map, default_layout_options, behavior_config)
+                    .await;
             }
         }
 
@@ -525,6 +532,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         &mut self,
         #[cfg(feature = "host")] keymap: &[[[KeyAction; COL]; ROW]; NUM_LAYER],
         #[cfg(feature = "host")] encoder_map: &Option<&mut [[EncoderAction; NUM_ENCODER]; NUM_LAYER]>,
+        #[cfg(feature = "host")] default_layout_options: u32,
         behavior: &config::BehaviorConfig,
     ) -> Result<(), ()> {
         // Save storage config
@@ -543,7 +551,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             StorageKey::LayoutConfig,
             &StorageData::from(LayoutConfig {
                 default_layer: 0,
-                layout_option: 0,
+                layout_option: default_layout_options,
             }),
         )
         .await
@@ -591,13 +599,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         &mut self,
         keymap: &[[[KeyAction; COL]; ROW]; NUM_LAYER],
         encoder_map: &Option<&[[EncoderAction; NUM_ENCODER]; NUM_LAYER]>,
+        default_layout_options: u32,
         behavior: &config::BehaviorConfig,
     ) -> Result<(), SSError<F::Error>> {
         self.store_data(
             StorageKey::LayoutConfig,
             &StorageData::from(LayoutConfig {
                 default_layer: 0,
-                layout_option: 0,
+                layout_option: default_layout_options,
             }),
         )
         .await?;
@@ -1050,6 +1059,8 @@ mod tests {
                 &keymap,
                 #[cfg(feature = "host")]
                 &encoder_map,
+                #[cfg(feature = "host")]
+                0,
                 &RuntimeStorageConfig::default(),
                 &RuntimeBehaviorConfig::default(),
             )
