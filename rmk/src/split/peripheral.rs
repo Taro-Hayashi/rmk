@@ -111,6 +111,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                                 )))
                                 .await;
                         }
+                        SplitMessage::Bootloader => crate::boot::jump_to_bootloader(),
                         SplitMessage::KeyboardIndicator(indicator) => {
                             // Publish KeyboardIndicator event
                             publish_event(LedIndicatorEvent::new(

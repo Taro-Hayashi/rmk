@@ -82,6 +82,11 @@ channel_size = 1
 pubs = 1
 subs = 0
 
+[event.peripheral_bootloader]
+channel_size = 1
+pubs = 1
+subs = 0
+
 [event.action]
 channel_size = 16
 pubs = 1

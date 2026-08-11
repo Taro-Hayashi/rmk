@@ -407,6 +407,7 @@ define_event_config!(
     central_connected,
     peripheral_battery,
     clear_peer,
+    peripheral_bootloader,
     // DFU events
     dfu_status,
     // Action events

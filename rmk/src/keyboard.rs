@@ -1683,6 +1683,10 @@ impl<'a> Keyboard<'a> {
                     // only meaningful when both transports exist in this build.
                     #[cfg(not(feature = "_no_usb"))]
                     crate::state::toggle_preferred().await;
+                } else if id == NUM_BLE_PROFILE as u8 + 5 {
+                    // Ask the first split peripheral to enter its bootloader.
+                    #[cfg(feature = "split")]
+                    publish_event(crate::event::PeripheralBootloaderEvent { id: 0 });
                 }
             }
         }

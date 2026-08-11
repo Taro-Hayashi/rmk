@@ -82,6 +82,8 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
         let mut connection_sub = crate::event::ConnectionStatusChangeEvent::subscriber();
         #[cfg(feature = "_ble")]
         let mut clear_peer_sub = crate::event::ClearPeerEvent::subscriber();
+        #[cfg(feature = "_ble")]
+        let mut peripheral_bootloader_sub = crate::event::PeripheralBootloaderEvent::subscriber();
 
         #[cfg(feature = "display")]
         let mut wpm_sub = crate::event::WpmUpdateEvent::subscriber();
@@ -103,6 +105,16 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
         }
 
         loop {
+            #[cfg(feature = "_ble")]
+            let peripheral_bootloader = async {
+                loop {
+                    let event = peripheral_bootloader_sub.next_event().await;
+                    if event.id == self.id {
+                        break SplitMessage::Bootloader;
+                    }
+                }
+            };
+
             // Use select_biased_with_feature to handle feature-gated subscriber arms
             let next_event_to_peri = async {
                 crate::select_biased_with_feature! {
@@ -123,6 +135,7 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
                         }
                         SplitMessage::ClearPeer
                     },
+                    with_feature("_ble"): e = peripheral_bootloader.fuse() => e,
                     with_feature("display"): e = wpm_sub.next_event().fuse() => SplitMessage::Wpm(e.0),
                     with_feature("display"): e = modifier_sub.next_event().fuse() => SplitMessage::Modifier(e.modifier.into_bits()),
                     with_feature("display"): e = sleep_sub.next_event().fuse() => SplitMessage::SleepState(e.0),
