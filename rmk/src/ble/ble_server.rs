@@ -2,6 +2,8 @@ use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
 use super::battery_service::BatteryService;
+#[cfg(feature = "split")]
+use super::battery_service::PeripheralBatteryService;
 use super::device_info::DeviceConfigurationService;
 #[cfg(feature = "host")]
 use crate::hid::ViaReport;
@@ -14,12 +16,33 @@ pub(crate) const CCCD_TABLE_SIZE: usize = trouble_host::config::CLIENT_ATT_TABLE
 // `gatt_server` compiles every member regardless of the surrounding `cfg` —
 // gating an individual field with `#[cfg(feature = "host")]` doesn't work. So
 // the whole struct is duplicated, with and without `host_service`.
-#[cfg(feature = "host")]
+#[cfg(all(feature = "host", feature = "split"))]
+#[gatt_server]
+pub(crate) struct Server {
+    pub(crate) battery_service: BatteryService,
+    pub(crate) peripheral_battery_service: PeripheralBatteryService,
+    pub(crate) hid_service: HidService,
+    pub(crate) host_service: VialService,
+    pub(crate) composite_service: CompositeService,
+    pub(crate) device_config_service: DeviceConfigurationService,
+}
+
+#[cfg(all(feature = "host", not(feature = "split")))]
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
     pub(crate) hid_service: HidService,
     pub(crate) host_service: VialService,
+    pub(crate) composite_service: CompositeService,
+    pub(crate) device_config_service: DeviceConfigurationService,
+}
+
+#[cfg(all(not(feature = "host"), feature = "split"))]
+#[gatt_server]
+pub(crate) struct Server {
+    pub(crate) battery_service: BatteryService,
+    pub(crate) peripheral_battery_service: PeripheralBatteryService,
+    pub(crate) hid_service: HidService,
     pub(crate) composite_service: CompositeService,
     pub(crate) device_config_service: DeviceConfigurationService,
 }
@@ -47,7 +70,7 @@ pub(crate) struct VialService {
     pub(crate) output_data: [u8; 32],
 }
 
-#[cfg(not(feature = "host"))]
+#[cfg(all(not(feature = "host"), not(feature = "split")))]
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,

@@ -1,3 +1,5 @@
+#[cfg(feature = "split")]
+use core::sync::atomic::AtomicU8;
 use core::sync::atomic::Ordering;
 
 use embassy_futures::join::join;
@@ -10,6 +12,8 @@ use trouble_host::prelude::*;
 use super::ble_server::Server;
 use crate::ble::SLEEPING_STATE;
 use crate::core_traits::Runnable;
+#[cfg(feature = "split")]
+use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
 
@@ -20,6 +24,46 @@ pub(crate) struct BatteryService {
     #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
     #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
     pub(crate) level: u8,
+}
+
+#[cfg(feature = "split")]
+const UNKNOWN_BATTERY_LEVEL: u8 = u8::MAX;
+
+#[cfg(feature = "split")]
+static PERIPHERAL_BATTERY_LEVEL: AtomicU8 = AtomicU8::new(UNKNOWN_BATTERY_LEVEL);
+
+/// Battery service for the first split peripheral.
+///
+/// The presentation format and user description let hosts distinguish this
+/// service from the central keyboard battery service.
+#[cfg(feature = "split")]
+#[gatt_service(uuid = service::BATTERY)]
+pub(crate) struct PeripheralBatteryService {
+    /// Battery Level
+    #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
+    #[descriptor(uuid = "2904", read, value = [0x04, 0x00, 0xAD, 0x27, 0x01, 0x08, 0x01])]
+    #[descriptor(uuid = "2901", read, value = "Peripheral 0")]
+    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
+    pub(crate) level: u8,
+}
+
+#[cfg(feature = "split")]
+pub(crate) fn cache_peripheral_battery_status(event: PeripheralBatteryEvent) {
+    if event.id != 0 {
+        return;
+    }
+
+    if let BatteryStatus::Available { level: Some(level), .. } = event.state.0 {
+        PERIPHERAL_BATTERY_LEVEL.store(level, Ordering::Release);
+    }
+}
+
+#[cfg(feature = "split")]
+fn current_peripheral_battery_level() -> Option<u8> {
+    match PERIPHERAL_BATTERY_LEVEL.load(Ordering::Acquire) {
+        UNKNOWN_BATTERY_LEVEL => None,
+        level => Some(level),
+    }
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
@@ -129,6 +173,57 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
             let current_time = Instant::now().as_secs() as u32;
             if current_time.saturating_sub(last_press) < 60 {
                 return battery_status;
+            }
+        }
+    }
+}
+
+#[cfg(feature = "split")]
+pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
+    battery_level: Characteristic<u8>,
+    conn: &'conn GattConnection<'stack, 'server, P>,
+    sub: Subscriber<
+        'static,
+        crate::RawMutex,
+        PeripheralBatteryEvent,
+        { crate::PERIPHERAL_BATTERY_EVENT_CHANNEL_SIZE },
+        { crate::PERIPHERAL_BATTERY_EVENT_SUB_SIZE },
+        { crate::PERIPHERAL_BATTERY_EVENT_PUB_SIZE },
+    >,
+}
+
+#[cfg(feature = "split")]
+impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
+    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+        Self {
+            battery_level: server.peripheral_battery_service.level,
+            conn,
+            sub: PeripheralBatteryEvent::subscriber(),
+        }
+    }
+}
+
+#[cfg(feature = "split")]
+impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
+    async fn run(&mut self) -> ! {
+        Timer::after_secs(2).await;
+
+        if let Some(level) = current_peripheral_battery_level()
+            && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+        {
+            error!("Failed to notify peripheral battery level: {:?}", e);
+        }
+
+        loop {
+            let event = self.sub.next_message_pure().await;
+            if event.id != 0 {
+                continue;
+            }
+
+            if let BatteryStatus::Available { level: Some(level), .. } = event.state.0
+                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+            {
+                error!("Failed to notify peripheral battery level: {:?}", e);
             }
         }
     }

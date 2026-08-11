@@ -13,6 +13,8 @@ use trouble_host::prelude::service::{BATTERY, HUMAN_INTERFACE_DEVICE};
 use trouble_host::prelude::*;
 
 use crate::ble::battery_service::BleBatteryServer;
+#[cfg(feature = "split")]
+use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 use crate::ble::led::BleLedReader;
@@ -650,6 +652,8 @@ async fn run_ble_keyboard<
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut ble_led_reader = BleLedReader;
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
+    #[cfg(feature = "split")]
+    let mut ble_peripheral_battery_server = config.enabled.then(|| BlePeripheralBatteryServer::new(server, conn));
 
     // CCCD lookup uses cached bond info to avoid a cancellable flash read while
     // this future is racing other arms of an outer `select`.
@@ -668,10 +672,18 @@ async fn run_ble_keyboard<
     update_ble_phy(stack, conn.raw()).await;
 
     let communication_task = async {
+        let battery_task = async {
+            #[cfg(feature = "split")]
+            join(ble_battery_server.run(), ble_peripheral_battery_server.run()).await;
+
+            #[cfg(not(feature = "split"))]
+            ble_battery_server.run().await;
+        };
+
         if let Either3::First(e) = select3(
             gatt_events_task(server, conn),
             set_conn_params(stack, conn),
-            ble_battery_server.run(),
+            battery_task,
         )
         .await
         {
