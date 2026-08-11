@@ -80,6 +80,7 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
         // Subscribe before the initial send so any change racing past the
         // snapshot is still delivered to us.
         let mut connection_sub = crate::event::ConnectionStatusChangeEvent::subscriber();
+        let mut user_state_sub = crate::event::UserStateEvent::subscriber();
         #[cfg(feature = "_ble")]
         let mut clear_peer_sub = crate::event::ClearPeerEvent::subscriber();
         #[cfg(feature = "_ble")]
@@ -104,6 +105,14 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
             return;
         }
 
+        for id in 0..16 {
+            if let Some(value) = crate::event::user_state(id) {
+                if self.send(&SplitMessage::UserState { id, value }).await.is_err() {
+                    return;
+                }
+            }
+        }
+
         loop {
             #[cfg(feature = "_ble")]
             let peripheral_bootloader = async {
@@ -121,6 +130,7 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
                     e = indicator_sub.next_event().fuse() => SplitMessage::KeyboardIndicator(e.0.into_bits()),
                     e = layer_sub.next_event().fuse() => SplitMessage::Layer(e.0),
                     e = connection_sub.next_event().fuse() => SplitMessage::ConnectionStatus(e.0),
+                    e = user_state_sub.next_event().fuse() => SplitMessage::UserState { id: e.id, value: e.value },
                     with_feature("_ble"): _ = clear_peer_sub.next_event().fuse() => {
                         #[cfg(feature = "storage")]
                         {

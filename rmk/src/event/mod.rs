@@ -64,9 +64,13 @@ pub use input::{
     PointingProcessorEvent, PointingSetCpiEvent, RotaryEncoderPos,
 };
 #[cfg(feature = "split")]
+pub(crate) use split::user_state;
+#[cfg(feature = "split")]
 pub use split::{CentralConnectedEvent, PeripheralConnectedEvent};
 #[cfg(all(feature = "split", feature = "_ble"))]
 pub use split::{ClearPeerEvent, PeripheralBatteryEvent, PeripheralBootloaderEvent};
+#[cfg(feature = "split")]
+pub use split::{UserStateEvent, publish_user_state};
 pub use state::{LayerChangeEvent, LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent};
 
 /// Trait for event publishers

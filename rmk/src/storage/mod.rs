@@ -41,6 +41,7 @@ static PEER_ADDRESS_RESPONSE: Signal<crate::RawMutex, Option<PeerAddress>> = Sig
 static CONNECTION_TYPE_RESPONSE: Signal<crate::RawMutex, Option<ConnectionType>> = Signal::new();
 #[cfg(feature = "_ble")]
 static ACTIVE_BLE_PROFILE_RESPONSE: Signal<crate::RawMutex, Option<u8>> = Signal::new();
+static USER_SETTING_RESPONSE: Signal<crate::RawMutex, Option<u8>> = Signal::new();
 
 #[cfg(feature = "_ble")]
 async fn request_read<T: Send>(msg: FlashOperationMessage, response: &Signal<crate::RawMutex, T>) -> T {
@@ -71,6 +72,20 @@ pub(crate) async fn read_active_ble_profile() -> Option<u8> {
         &ACTIVE_BLE_PROFILE_RESPONSE,
     )
     .await
+}
+
+/// Read an application-defined byte setting from RMK storage.
+pub async fn read_user_setting(id: u8) -> Option<u8> {
+    request_read(FlashOperationMessage::ReadUserSetting(id), &USER_SETTING_RESPONSE).await
+}
+
+/// Persist an application-defined byte setting and wait for the write to finish.
+pub async fn write_user_setting(id: u8, value: u8) -> bool {
+    FLASH_OPERATION_FINISHED.reset();
+    FLASH_CHANNEL
+        .send(FlashOperationMessage::UserSetting { id, value })
+        .await;
+    FLASH_OPERATION_FINISHED.wait().await
 }
 
 /// Send a peer address to be persisted; wait for the storage task to finish.
@@ -163,6 +178,13 @@ pub(crate) enum FlashOperationMessage {
     #[cfg(feature = "_ble")]
     // Read the persisted active BLE profile number; storage task replies via `ACTIVE_BLE_PROFILE_RESPONSE`.
     ReadActiveBleProfile,
+    // Application-defined byte setting.
+    UserSetting {
+        id: u8,
+        value: u8,
+    },
+    // Read an application-defined byte setting.
+    ReadUserSetting(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -197,6 +219,7 @@ pub(crate) enum StorageKey {
     ActiveBleProfile,
     #[cfg(feature = "_ble")]
     BondInfo(u8),
+    UserSetting(u8),
 }
 
 impl StorageKey {
@@ -278,6 +301,7 @@ pub(crate) enum StorageData {
     BondInfo(ProfileInfo),
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
+    UserSetting(u8),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
@@ -404,6 +428,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
 
     async fn store_data(&mut self, key: StorageKey, data: &StorageData) -> Result<(), SSError<F::Error>> {
         self.flash.store_item(&mut self.buffer, &key, data).await
+    }
+
+    /// Read an application-defined byte setting before the storage task starts.
+    pub async fn user_setting(&mut self, id: u8) -> Option<u8> {
+        match self.fetch_data(StorageKey::UserSetting(id)).await {
+            Some(StorageData::UserSetting(value)) => Some(value),
+            _ => None,
+        }
     }
 
     pub async fn new(
@@ -718,6 +750,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     ACTIVE_BLE_PROFILE_RESPONSE.signal(resp);
                     continue;
                 }
+                FlashOperationMessage::ReadUserSetting(id) => {
+                    let resp = match self.fetch_data(StorageKey::UserSetting(id)).await {
+                        Some(StorageData::UserSetting(value)) => Some(value),
+                        _ => None,
+                    };
+                    USER_SETTING_RESPONSE.signal(resp);
+                    continue;
+                }
 
                 FlashOperationMessage::LayoutOptions(layout_option) => {
                     update_storage_field!(&mut self.flash, &mut self.buffer, LayoutConfig, layout_option)
@@ -766,6 +806,10 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 }
                 FlashOperationMessage::ConnectionType(ty) => {
                     self.store_data(StorageKey::ConnectionType, &StorageData::ConnectionType(ty))
+                        .await
+                }
+                FlashOperationMessage::UserSetting { id, value } => {
+                    self.store_data(StorageKey::UserSetting(id), &StorageData::UserSetting(value))
                         .await
                 }
                 #[cfg(all(feature = "_ble", feature = "split"))]

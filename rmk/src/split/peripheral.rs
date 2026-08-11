@@ -122,6 +122,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                             // Publish Layer event
                             publish_event(LayerChangeEvent::new(layer));
                         }
+                        SplitMessage::UserState { id, value } => {
+                            publish_event(crate::event::UserStateEvent { id, value });
+                        }
                         #[cfg(feature = "display")]
                         SplitMessage::Wpm(wpm) => {
                             publish_event(WpmUpdateEvent::new(wpm));

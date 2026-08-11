@@ -42,6 +42,8 @@ pub(crate) enum SplitMessage {
     KeyboardIndicator(u8),
     /// Layer number from central to peripheral
     Layer(u8),
+    /// Application-defined byte state from central to peripheral.
+    UserState { id: u8, value: u8 },
     /// WPM from central to peripheral
     #[cfg(feature = "display")]
     Wpm(u16),
