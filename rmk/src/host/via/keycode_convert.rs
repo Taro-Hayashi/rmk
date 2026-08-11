@@ -95,7 +95,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                     0
                 }
             },
-            Action::User(id) => (id as u16 & 0xF) | 0x7E00,
+            Action::User(id) => (id as u16 & 0x1F) | 0x7E00,
             _ => {
                 warn!("Action: {:?} in vial is not supported yet", a);
                 0
@@ -245,9 +245,9 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             );
             KeyAction::No
         }
-        0x7E00..=0x7E0F => {
+        0x7E00..=0x7E1F => {
             // QK_KB_N, aka UserN
-            KeyAction::Single(Action::User(via_keycode as u8 & 0xF))
+            KeyAction::Single(Action::User(via_keycode as u8 & 0x1F))
         }
         _ => {
             warn!("Via keycode {:#X} is not processed", via_keycode);
@@ -270,6 +270,14 @@ mod test {
             KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A))),
             from_via_keycode(via_keycode)
         );
+
+        // QK_KB_0..QK_KB_31, aka User0..User31
+        for id in [0, 15, 16, 31] {
+            let action = KeyAction::Single(Action::User(id));
+            let via_keycode = 0x7E00 | id as u16;
+            assert_eq!(via_keycode, to_via_keycode(action));
+            assert_eq!(action, from_via_keycode(via_keycode));
+        }
 
         // Right shift
         let via_keycode = 0xE5;
