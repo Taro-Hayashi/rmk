@@ -6,7 +6,7 @@ use rmk_macro::event;
 
 use super::{battery::BatteryStatusEvent, publish_event};
 
-const USER_STATE_SLOTS: usize = 16;
+const USER_STATE_SLOTS: usize = 32;
 const USER_STATE_VALID: u16 = 1 << 8;
 static USER_STATE: [AtomicU16; USER_STATE_SLOTS] = [const { AtomicU16::new(0) }; USER_STATE_SLOTS];
 

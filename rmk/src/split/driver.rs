@@ -105,7 +105,7 @@ impl<const ROW: usize, const COL: usize, const ROW_OFFSET: usize, const COL_OFFS
             return;
         }
 
-        for id in 0..16 {
+        for id in 0..32 {
             if let Some(value) = crate::event::user_state(id) {
                 if self.send(&SplitMessage::UserState { id, value }).await.is_err() {
                     return;
