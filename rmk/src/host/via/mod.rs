@@ -9,7 +9,8 @@ use crate::core_traits::Runnable;
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::custom_value::{
-    CustomValueCommand, CustomValueRequest, CustomValueResponse, dispatch, payload_from_packet,
+    CustomValueCommand, CustomValueRequest, CustomValueResponse, dispatch, legacy_payload_from_packet,
+    payload_from_packet,
 };
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::{MACRO_SPACE_SIZE, boot};
@@ -231,13 +232,23 @@ impl<'a> VialService<'a> {
     }
 
     async fn process_custom_value(&self, report: &mut ViaReport, command: CustomValueCommand) {
+        let legacy = VIA_PROTOCOL_VERSION < 0x000B;
         let request = CustomValueRequest {
             command,
-            channel_id: report.output_data[1],
-            value_id: report.output_data[2],
-            payload: payload_from_packet(&report.output_data),
+            channel_id: if legacy { 0 } else { report.output_data[1] },
+            value_id: if legacy {
+                report.output_data[1]
+            } else {
+                report.output_data[2]
+            },
+            payload: if legacy {
+                legacy_payload_from_packet(&report.output_data)
+            } else {
+                payload_from_packet(&report.output_data)
+            },
         };
         match dispatch(request).await {
+            CustomValueResponse::Handled(payload) if legacy => report.input_data[2..31].copy_from_slice(&payload),
             CustomValueResponse::Handled(payload) => report.input_data[3..].copy_from_slice(&payload),
             CustomValueResponse::Unhandled => report.input_data[0] = ViaCommand::Unhandled as u8,
         }

@@ -56,6 +56,12 @@ pub(super) fn payload_from_packet(packet: &[u8; 32]) -> [u8; PAYLOAD_LEN] {
     payload
 }
 
+pub(super) fn legacy_payload_from_packet(packet: &[u8; 32]) -> [u8; PAYLOAD_LEN] {
+    let mut payload = [0; PAYLOAD_LEN];
+    payload.copy_from_slice(&packet[2..31]);
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +78,17 @@ mod tests {
         let payload = payload_from_packet(&packet);
         assert_eq!(payload[0], 0x12);
         assert_eq!(payload[28], 0x34);
+    }
+
+    #[test]
+    fn legacy_payload_starts_after_command_and_value() {
+        let mut packet = [0; 32];
+        packet[0] = 0x07;
+        packet[1] = 0x83;
+        packet[2] = 0x12;
+        packet[3] = 0x34;
+
+        let payload = legacy_payload_from_packet(&packet);
+        assert_eq!(payload[0..2], [0x12, 0x34]);
     }
 }
