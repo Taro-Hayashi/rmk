@@ -2,7 +2,9 @@
 
 use strum::FromRepr;
 
-pub const VIA_PROTOCOL_VERSION: u16 = 0x0009;
+/// VIA protocol 11 is required for V3 keyboard definitions and channel-based
+/// Custom Get/Set/Save commands.
+pub const VIA_PROTOCOL_VERSION: u16 = 0x000B;
 pub const VIA_FIRMWARE_VERSION: u32 = 0x0001;
 
 pub const VIAL_PROTOCOL_VERSION: u32 = 6;
@@ -40,6 +42,19 @@ pub enum ViaCommand {
 impl From<u8> for ViaCommand {
     fn from(value: u8) -> Self {
         Self::from_repr(value).unwrap_or(Self::Unhandled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_v3_custom_ui_protocol() {
+        assert!(VIA_PROTOCOL_VERSION >= 0x000B);
+        assert_eq!(ViaCommand::from(0x07), ViaCommand::CustomSetValue);
+        assert_eq!(ViaCommand::from(0x08), ViaCommand::CustomGetValue);
+        assert_eq!(ViaCommand::from(0x09), ViaCommand::CustomSave);
     }
 }
 
