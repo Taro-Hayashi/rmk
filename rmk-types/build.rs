@@ -74,6 +74,10 @@ fn generate_constants(bc: &BuildConstants) -> String {
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
     ));
+    lines.push(format!(
+        "pub const SPLIT_CENTRAL_CONNECTION_INTERVAL_US: u32 = {};",
+        bc.split_central_connection_interval_us
+    ));
     lines.push(format!("pub const MORSE_MAX_NUM: usize = {};", bc.morse_max_num));
     lines.push(format!(
         "pub const AUTO_MOUSE_LAYER_MAX_NUM: usize = {};",

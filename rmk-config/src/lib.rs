@@ -252,9 +252,13 @@ pub(crate) struct RmkConstantsConfig {
     /// The number of available BLE profiles
     #[serde_inline_default(3)]
     pub ble_profiles_num: usize,
-    /// BLE Split Central sleep timeout in minutes (0 = disabled)
+    /// BLE split central sleep timeout in seconds (0 = disabled).
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
+    /// BLE split central-to-peripheral connection interval in microseconds.
+    /// Must be a BLE connection interval unit (1.25 ms), from 7.5 ms to 4 s.
+    #[serde_inline_default(7500)]
+    pub split_central_connection_interval_us: u32,
     /// Maximum number of key actions in a bulk keymap transfer (protocol).
     /// Smaller values reduce firmware RAM usage but require more round-trips.
     #[serde_inline_default(8)]
@@ -328,6 +332,7 @@ impl Default for RmkConstantsConfig {
             split_peripherals_num: 0,
             ble_profiles_num: 3,
             split_central_sleep_timeout_seconds: 0,
+            split_central_connection_interval_us: 7500,
             protocol_max_bulk_size: 8,
             protocol_macro_chunk_size: 64,
         }

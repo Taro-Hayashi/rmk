@@ -10,7 +10,6 @@ use embassy_time::{Duration, Timer, with_timeout};
 use heapless::VecView;
 use trouble_host::prelude::*;
 
-use crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS;
 use crate::ble::{SLEEPING_STATE, update_ble_phy, update_conn_params};
 use crate::channel::FLASH_CHANNEL;
 use crate::event::{PeripheralConnectedEvent, SleepStateEvent, publish_event};
@@ -19,6 +18,7 @@ use crate::split::ble::PeerAddress;
 use crate::split::driver::{PeripheralManager, SplitDriverError, SplitReader, SplitWriter};
 use crate::split::{SPLIT_MESSAGE_MAX_SIZE, SplitMessage};
 use crate::storage::FlashOperationMessage;
+use crate::{SPLIT_CENTRAL_CONNECTION_INTERVAL_US, SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS};
 
 pub(crate) static STACK_STARTED: Signal<crate::RawMutex, bool> = Signal::new();
 pub(crate) static PERIPHERAL_FOUND: Signal<crate::RawMutex, (u8, BdAddr)> = Signal::new();
@@ -258,8 +258,8 @@ pub(crate) async fn run_ble_peripheral_manager<
 
 fn defaul_central_conn_param() -> RequestedConnParams {
     RequestedConnParams {
-        min_connection_interval: Duration::from_micros(7500),
-        max_connection_interval: Duration::from_micros(7500),
+        min_connection_interval: Duration::from_micros(SPLIT_CENTRAL_CONNECTION_INTERVAL_US as u64),
+        max_connection_interval: Duration::from_micros(SPLIT_CENTRAL_CONNECTION_INTERVAL_US as u64),
         max_latency: 30, // 225ms
         supervision_timeout: Duration::from_secs(5),
         ..Default::default()

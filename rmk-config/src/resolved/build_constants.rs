@@ -46,6 +46,7 @@ pub struct BuildConstants {
     pub split_peripherals_num: usize,
     pub ble_profiles_num: usize,
     pub split_central_sleep_timeout_seconds: u32,
+    pub split_central_connection_interval_us: u32,
     pub protocol_max_bulk_size: usize,
     pub protocol_macro_chunk_size: usize,
     pub events: Vec<EventChannel>,
@@ -157,6 +158,14 @@ impl crate::KeyboardTomlConfig {
                 protocol_limits::MAX_BULK_SIZE
             ));
         }
+        if !(7_500..=4_000_000).contains(&rmk.split_central_connection_interval_us)
+            || rmk.split_central_connection_interval_us % 1_250 != 0
+        {
+            return Err(format!(
+                "split_central_connection_interval_us ({}) must be between 7500 and 4000000 and divisible by 1250",
+                rmk.split_central_connection_interval_us
+            ));
+        }
 
         Ok(BuildConstants {
             combo_max_num: rmk.combo_max_num,
@@ -174,6 +183,7 @@ impl crate::KeyboardTomlConfig {
             split_peripherals_num,
             ble_profiles_num: rmk.ble_profiles_num,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
+            split_central_connection_interval_us: rmk.split_central_connection_interval_us,
             protocol_max_bulk_size: rmk.protocol_max_bulk_size,
             protocol_macro_chunk_size: rmk.protocol_macro_chunk_size,
             events,
@@ -221,7 +231,36 @@ fn resolve_passkey_enabled(ble: &crate::BleConfig) -> Result<Passkey, String> {
 #[cfg(test)]
 mod tests {
     use super::resolve_passkey_enabled;
-    use crate::{BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
+    use crate::{BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, KeyboardTomlConfig, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
+
+    #[test]
+    fn resolves_split_central_connection_interval() {
+        let default_config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            default_config
+                .build_constants(&["split"])
+                .unwrap()
+                .split_central_connection_interval_us,
+            7_500
+        );
+
+        let custom_config: KeyboardTomlConfig =
+            toml::from_str("[rmk]\nsplit_central_connection_interval_us = 30000\n").unwrap();
+        assert_eq!(
+            custom_config
+                .build_constants(&["split"])
+                .unwrap()
+                .split_central_connection_interval_us,
+            30_000
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_split_central_connection_interval() {
+        let config: KeyboardTomlConfig =
+            toml::from_str("[rmk]\nsplit_central_connection_interval_us = 8000\n").unwrap();
+        assert!(config.build_constants(&["split"]).is_err());
+    }
 
     #[test]
     fn validates_passkey_timeout() {
