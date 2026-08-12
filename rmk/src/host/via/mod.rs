@@ -8,6 +8,9 @@ use crate::config::{RmkConfig, VialConfig};
 use crate::core_traits::Runnable;
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
+use crate::host::custom_value::{
+    CustomValueCommand, CustomValueRequest, CustomValueResponse, dispatch, payload_from_packet,
+};
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::{MACRO_SPACE_SIZE, boot};
 
@@ -116,16 +119,13 @@ impl<'a> VialService<'a> {
                 warn!("Dynamic keymap reset -- not supported")
             }
             ViaCommand::CustomSetValue => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom set value -- not supported")
+                self.process_custom_value(report, CustomValueCommand::Set).await;
             }
             ViaCommand::CustomGetValue => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom get value -- not supported")
+                self.process_custom_value(report, CustomValueCommand::Get).await;
             }
             ViaCommand::CustomSave => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom get value -- not supported")
+                self.process_custom_value(report, CustomValueCommand::Save).await;
             }
             ViaCommand::EepromReset => {
                 warn!("Resetting storage..");
@@ -227,6 +227,19 @@ impl<'a> VialService<'a> {
                 info!("Unknown cmd: {:?}", report.output_data);
                 report.input_data[0] = ViaCommand::Unhandled as u8
             }
+        }
+    }
+
+    async fn process_custom_value(&self, report: &mut ViaReport, command: CustomValueCommand) {
+        let request = CustomValueRequest {
+            command,
+            channel_id: report.output_data[1],
+            value_id: report.output_data[2],
+            payload: payload_from_packet(&report.output_data),
+        };
+        match dispatch(request).await {
+            CustomValueResponse::Handled(payload) => report.input_data[3..].copy_from_slice(&payload),
+            CustomValueResponse::Unhandled => report.input_data[0] = ViaCommand::Unhandled as u8,
         }
     }
 }

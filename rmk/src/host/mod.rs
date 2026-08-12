@@ -1,6 +1,8 @@
 #[cfg(feature = "_ble")]
 pub(crate) mod ble;
 pub(crate) mod context;
+#[cfg(feature = "vial")]
+pub mod custom_value;
 #[cfg(feature = "storage")]
 pub(crate) mod storage;
 #[cfg(not(feature = "_no_usb"))]
