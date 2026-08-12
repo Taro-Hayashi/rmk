@@ -12,7 +12,9 @@ use trouble_host::prelude::*;
 
 use crate::ble::{SLEEPING_STATE, update_ble_phy, update_conn_params};
 use crate::channel::FLASH_CHANNEL;
-use crate::event::{PeripheralConnectedEvent, SleepStateEvent, publish_event};
+use crate::event::{
+    ClearPeerEvent, KeyboardEvent, PeripheralConnectedEvent, SleepStateEvent, SubscribableEvent, publish_event,
+};
 #[cfg(feature = "storage")]
 use crate::split::ble::PeerAddress;
 use crate::split::driver::{PeripheralManager, SplitDriverError, SplitReader, SplitWriter};
@@ -176,6 +178,8 @@ pub(crate) async fn run_ble_peripheral_manager<
     stack: &'b Stack<'s, C, DefaultPacketPool>,
 ) {
     trace!("SPLIT_MESSAGE_MAX_SIZE: {}", SPLIT_MESSAGE_MAX_SIZE);
+    let mut consecutive_failures = 0usize;
+    let mut clear_peer_sub = ClearPeerEvent::subscriber();
 
     loop {
         // Check until the address is available
@@ -224,6 +228,7 @@ pub(crate) async fn run_ble_peripheral_manager<
         {
             Ok(Ok(conn)) => {
                 info!("Connected to peripheral {}", peri_id);
+                consecutive_failures = 0;
 
                 publish_event(PeripheralConnectedEvent {
                     id: peri_id,
@@ -239,20 +244,58 @@ pub(crate) async fn run_ble_peripheral_manager<
                 }
             }
             Ok(Err(e)) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
                 #[cfg(feature = "defmt")]
                 let e = defmt::Debug2Format(&e);
                 error!("Connect to peripheral {} error: {:?}", peri_id, e);
             }
             Err(_) => {
-                // Connect to peripheral timeout
-                warn!("Connect to peripheral {} timeout, clearing", peri_id);
-                if let Some(addr) = addrs.borrow_mut().get_mut(peri_id) {
-                    *addr = None
-                };
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                warn!("Connect to peripheral {} timeout", peri_id);
             }
         }
-        // Reconnect after 500ms
-        embassy_time::Timer::after_millis(500).await;
+
+        if consecutive_failures == 0 {
+            Timer::after_millis(500).await;
+            continue;
+        }
+
+        let delay = reconnect_backoff(consecutive_failures);
+        info!("Retry peripheral {} connection in {} ms", peri_id, delay.as_millis());
+        let mut key_wake = KeyboardEvent::subscriber();
+        match select3(
+            Timer::after(delay),
+            key_wake.next_message_pure(),
+            clear_peer_sub.next_message_pure(),
+        )
+        .await
+        {
+            Either3::First(_) => {}
+            Either3::Second(_) => info!("Local key activity interrupted peripheral reconnect backoff"),
+            Either3::Third(_) => {
+                info!("Clearing saved peripheral {} address", peri_id);
+                if let Some(addr) = addrs.borrow_mut().get_mut(peri_id) {
+                    *addr = None;
+                }
+                FLASH_CHANNEL
+                    .send(FlashOperationMessage::PeerAddress(PeerAddress::new(
+                        peri_id as u8,
+                        false,
+                        [0; 6],
+                    )))
+                    .await;
+                consecutive_failures = 0;
+            }
+        }
+    }
+}
+
+fn reconnect_backoff(consecutive_failures: usize) -> Duration {
+    match consecutive_failures {
+        0 => Duration::from_millis(500),
+        1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(15),
     }
 }
 
